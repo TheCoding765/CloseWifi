@@ -1,0 +1,258 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+      - name: Proje dosyalarini olustur
+        run: |
+          true
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "WifiGuard"
+          include ':app'
+          EOF
+          true
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.5.0' apply false
+          }
+          EOF
+          true
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g
+          android.useAndroidX=false
+          EOF
+          mkdir -p app
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.example.wifiguard'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId 'com.example.wifiguard'
+                  minSdk 21
+                  targetSdk 28
+                  versionCode 1
+                  versionName '1.0'
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+          }
+          EOF
+          mkdir -p app/src/main
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          >
+
+              <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+              <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+
+              <application android:label="Wi-Fi Koruması" android:theme="@android:style/Theme.Material.Light">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".WifiAccessibilityService"
+                      android:exported="true"
+                      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+                      <intent-filter>
+                          <action android:name="android.accessibilityservice.AccessibilityService" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.accessibilityservice"
+                          android:resource="@xml/accessibility_config" />
+                  </service>
+              </application>
+          </manifest>
+          EOF
+          mkdir -p app/src/main/res/xml
+          cat > app/src/main/res/xml/accessibility_config.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:canRetrieveWindowContent="true"
+              android:notificationTimeout="100"
+              android:description="@string/wg_desc" />
+          EOF
+          mkdir -p app/src/main/res/values
+          cat > app/src/main/res/values/wg_strings.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="wg_desc">Wi-Fi açıldığında hızlı ayarlardan Wi-Fi kutucuğuna dokunarak geri kapatır.</string>
+          </resources>
+          EOF
+          mkdir -p app/src/main/java/com/example/wifiguard
+          cat > app/src/main/java/com/example/wifiguard/MainActivity.java <<'EOF'
+          package com.example.wifiguard;
+
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.os.Bundle;
+          import android.provider.Settings;
+          import android.view.Gravity;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.Switch;
+          import android.widget.TextView;
+
+          public class MainActivity extends Activity {
+              @Override
+              protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  final SharedPreferences sp = getSharedPreferences("p", MODE_PRIVATE);
+
+                  LinearLayout l = new LinearLayout(this);
+                  l.setOrientation(LinearLayout.VERTICAL);
+                  l.setGravity(Gravity.CENTER);
+                  l.setPadding(48, 48, 48, 48);
+
+                  TextView t = new TextView(this);
+                  t.setText("Wi-Fi Koruması");
+                  t.setTextSize(26);
+                  t.setPadding(0, 0, 0, 48);
+
+                  Switch s = new Switch(this);
+                  s.setText("Wi-Fi açılırsa geri kapat  ");
+                  s.setTextSize(18);
+                  s.setChecked(sp.getBoolean("on", false));
+                  s.setOnCheckedChangeListener((v, checked) ->
+                          sp.edit().putBoolean("on", checked).apply());
+
+                  Button btn = new Button(this);
+                  btn.setText("Erişilebilirlik ayarlarını aç");
+                  btn.setOnClickListener(v ->
+                          startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+
+                  TextView hint = new TextView(this);
+                  hint.setText("Önce Erişilebilirlik'ten \"Wi-Fi Koruması\" servisini aç.");
+                  hint.setPadding(0, 24, 0, 0);
+
+                  l.addView(t);
+                  l.addView(s);
+                  l.addView(btn);
+                  l.addView(hint);
+                  setContentView(l);
+              }
+          }
+          EOF
+          mkdir -p app/src/main/java/com/example/wifiguard
+          cat > app/src/main/java/com/example/wifiguard/WifiAccessibilityService.java <<'EOF'
+          package com.example.wifiguard;
+
+          import android.accessibilityservice.AccessibilityService;
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.IntentFilter;
+          import android.net.wifi.WifiManager;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.view.accessibility.AccessibilityEvent;
+          import android.view.accessibility.AccessibilityNodeInfo;
+          import android.widget.Toast;
+
+          import java.util.List;
+
+          public class WifiAccessibilityService extends AccessibilityService {
+
+              private final Handler h = new Handler(Looper.getMainLooper());
+              private boolean pending = false;
+
+              private final BroadcastReceiver rx = new BroadcastReceiver() {
+                  @Override
+                  public void onReceive(Context c, Intent i) {
+                      int st = i.getIntExtra(WifiManager.EXTRA_WIFI_STATE, -1);
+                      if (st != WifiManager.WIFI_STATE_ENABLED) return;
+                      if (!getSharedPreferences("p", MODE_PRIVATE).getBoolean("on", false)) return;
+
+                      Toast.makeText(c, "⚠ Wi-Fi açmak engellendi!", Toast.LENGTH_LONG).show();
+
+                      // 1. yol: doğrudan kapat (targetSdk 28 ile çalışabilir)
+                      WifiManager wm = (WifiManager) c.getApplicationContext()
+                              .getSystemService(Context.WIFI_SERVICE);
+                      if (wm.setWifiEnabled(false)) return;
+
+                      // 2. yol: hızlı ayarları aç, Wi-Fi kutucuğuna dokun
+                      pending = true;
+                      performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS);
+                      h.postDelayed(() -> pending = false, 4000);
+                  }
+              };
+
+              @Override
+              protected void onServiceConnected() {
+                  registerReceiver(rx, new IntentFilter(WifiManager.WIFI_STATE_CHANGED_ACTION));
+              }
+
+              @Override
+              public void onAccessibilityEvent(AccessibilityEvent e) {
+                  if (!pending) return;
+                  AccessibilityNodeInfo root = getRootInActiveWindow();
+                  if (root == null) return;
+
+                  WifiManager wm = (WifiManager) getApplicationContext()
+                          .getSystemService(Context.WIFI_SERVICE);
+                  if (!wm.isWifiEnabled()) { // zaten kapanmış
+                      pending = false;
+                      performGlobalAction(GLOBAL_ACTION_BACK);
+                      return;
+                  }
+
+                  for (String key : new String[]{"Wifi", "Wi-Fi", "WiFi"}) {
+                      List<AccessibilityNodeInfo> list = root.findAccessibilityNodeInfosByText(key);
+                      for (AccessibilityNodeInfo n : list) {
+                          AccessibilityNodeInfo p = n;
+                          while (p != null && !p.isClickable()) p = p.getParent();
+                          if (p != null && p.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                              pending = false;
+                              h.postDelayed(() -> performGlobalAction(GLOBAL_ACTION_BACK), 600);
+                              return;
+                          }
+                      }
+                  }
+              }
+
+              @Override
+              public void onInterrupt() { }
+
+              @Override
+              public void onDestroy() {
+                  try { unregisterReceiver(rx); } catch (Exception ignored) { }
+                  super.onDestroy();
+              }
+          }
+          EOF
+      - run: gradle assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wifiguard-apk
+          path: app/build/outputs/apk/debug/*.apk
